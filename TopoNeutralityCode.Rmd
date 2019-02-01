@@ -7,17 +7,9 @@ editor_options:
   chunk_output_type: console
 ---
 
-
----
-title: "Untitled"
-author: "Jonathan Bourne"
-date: "7 January 2019"
-output: html_document
-editor_options: 
-  chunk_output_type: console
----
-
 This code explores the effect of what is removed on the amount of overloads/islands/targeted on the system
+
+pandapower, PyPSA, PYPOWER
 
 #Setup Block
 
@@ -55,6 +47,8 @@ StratAttackWd <- "/media/jonno/Seagate Expansion Drive/ProportionalLoading/Strat
 
 source("/home/jonno/Create_ETYS_network/SubCode/LoadData2.R")
 
+list.files("/home/jonno/Useful_PhD__R_Functions", pattern = ".R", full.names = T) %>%
+  walk(~source(.x))
 
 #FOr NetSci
 #FiguresFolder <- "/home/jonno/Dropbox/Apps/ShareLaTeX/NetSci2018 Poster/Figures"
@@ -103,46 +97,6 @@ saveRDS(DeleteOrders, filename)
 
 
 #Scramble Node function
-```{r}
-NodeCharacteristiceScrambler <- function(g, Sims, seed = 1983){
-#This function generates a matrix that gives the new node function order.
-  #for example it says that node 1 now has the function of node 5.
-  #It simply generates an integer dataframe giving the new node function for each simulation
-  #g: an Igraph object
-  #Sims: the number of simulations
-  
-TotNodes <- vcount(g)
-NodeNames <- tibble(name = get.vertex.attribute(g, name = "name"))
-
-set.seed(seed)
-Out <- 1:Sims %>%
-    map(~{
-
-      df <- sample(1:TotNodes, TotNodes, replace = FALSE) %>%
-        as.matrix(., ncol = 1) %>%
-        as_tibble() %>%
-        setNames(paste0("Sim_", .x))
-      return(df)
-    }) %>%
-    bind_cols(NodeNames, .)
-
-}
-
-ReOrderGraph <- function(g, Sim_Order){
-
-  g2 <-g
-  
-    for(n in c("Demand", "Generation", "BalencedPower")){
-      g2 <- set.vertex.attribute(g2, n, 
-                                value = get.vertex.attribute(g2, n )[Sim_Order])
-    }
-  
-  return(g2)
-}
-
-```
-
-
 
 ```{r}
 
@@ -159,46 +113,6 @@ saveRDS(DeleteOrders, filename)
 #Make simulations order
 NewFunctionOrder <- NodeCharacteristiceScrambler(gbase, 100)
   
-```
-
-##Generate Stategies
-```{r}
-
-CreateStrategyAttackDf <- function(g){
-
-ElecCen1<- ElectricalCentrality(g)
-#degree
-StratAttackVect <- c(as_data_frame(g, what = "vertices") %>% 
-  as_tibble %>%
-      mutate(metric = degree(g)) %>%
-      arrange(desc(metric)) %>% .$name,
-#entropic degree line limit
-as_data_frame(g, what = "vertices") %>%
-      mutate(metric = EntropicDegree(g, Scale = TRUE)) %>%
-      arrange(desc(metric)) %>% .$name,
-#entropic degree powerflow
-as_data_frame(g, what = "vertices") %>%
-      mutate(metric = EntropicDegree(g, value = "PowerFlow", Scale = TRUE)) %>%
-      arrange(desc(metric)) %>% .$name,
-
-#Electrical centrality
-ElecCen1$NodeEC %>% arrange(-NodeEC) %>% .$Bus.Name,
-
-#centrality
- as_data_frame(g, what = "vertices") %>%
-      mutate(metric = betweenness(g)) %>%
-      arrange(desc(metric)) %>% .$name
-) %>% matrix(., nrow = 5, byrow = T) %>%
-  as_tibble %>%
-  mutate(SimulationID = paste0("Simulation_ID_",1:5)) %>%
-  select(SimulationID, everything()) %>%
-  setNames(c("SimulationID", paste0("Target", 1:vcount(g))))
-
-return(StratAttackVect)
-
-}
-
-
 ```
 
 #Simulate attacks using strategies
@@ -526,6 +440,23 @@ test %>%
   filter(Metric == "EntDeg_PowerFlow") %>%
   ggplot(aes(x = value, colour = Real)) + geom_density() +
   facet_wrap(~Metric, scales = "free_x") +scale_x_log10()
+
+
+test %>%
+ # mutate(Real = factor(Real)) %>%
+  filter(Metric == "Elec_Centrality", Real==1) %>%
+  ggplot(aes(x = value, colour = NodeType)) + geom_density() +
+  facet_wrap(~Metric, scales = "free_x") + 
+  scale_x_log10() +
+  NULL
+
+#The degree ditribution density of the node types
+#This basically is a visual condistional probability table
+test %>%
+  filter(Metric == "Degree", Real==1) %>%
+  ggplot(aes( fill = NodeType)) + 
+  geom_histogram(aes(x = value, stat(density)),binwidth = 1) +
+  facet_wrap(~NodeType) 
  
 ```
 
@@ -575,34 +506,7 @@ EdgesNodesScramble %>%
 #Model Nodes
 
 ```{r}
-KfoldIndex <- function(df, k = 10, seed = 2018){
-  #Stratified kfold sampler
-  #takes a 1 column dataframe which should be split into k-folds, returns a 1 column data frame where each row contains
-  #an integer that represents the fold
-  AddKFold<- function(df, k, seed){
-    set.seed(seed)
-    df %>% 
-      mutate(fold_ID = rep(1:k, length.out = nrow(df)) %>%
-               sample(., size = nrow(df)))}
-  
-  ColumnName <- names(df)[1]
-  
-  df <- df %>% select(Y = 1) %>%
-    mutate(ID_for_sampling = 1:n())
-  
-  
-  Pos <- df %>% 
-    filter(Y == TRUE) %>% AddKFold(., k, seed)
-  
-  Neg <- df %>% 
-    filter(Y == FALSE) %>% AddKFold(.,k, seed)
-  
-  df <- bind_rows(Pos, Neg) %>%
-    arrange(ID_for_sampling) %>%
-    select(fold_ID) %>% setNames(ColumnName)
-  
-  return(df)
-}
+
 
 ```
 
@@ -678,8 +582,10 @@ StandardVuln %>%
   })
 
 TestOut %>%
+  #filter(!(Degree == 1 & Type == "Transfer")) %>% # shows the percent of nodes when there are no dead ends
   group_by(Type) %>%
-  summarise(counts = sum(true))
+  summarise(counts = sum(true)) %>%
+  mutate(Perc = counts/sum(counts))
 
 TestOut %>%
   ggplot(aes(x = Degree, y = cumsum, colour = Type)) + geom_line()
@@ -698,3 +604,102 @@ If it is similar more similar to the real values, this means that the positionin
 Otherwise I should scramble Gen and Demand internally and see what happens. 
 
 The key is to understand what is happening in terms of placement of node and gen and use this to inform either a predictive or generative algorithm
+
+
+#Islanding vs overloading
+
+
+#Simplify network
+
+This chunk looks at removing all voltage 0 or distance 0 nodes also near 0.
+```{r}
+
+Edges <- as_data_frame(gstandard) 
+%>%
+  filter(Voltage != 0, Link.Limit != 1e5)
+
+#Edges of zero length all have 0 voltage, this means we can merge all those nodes with relative impunity.
+test <- Edges %>%
+  filter(Voltage == 0)
+
+table(test$Voltage, test$Length)
+
+#Also all edges with 0 Link limit have 0 length
+test <- Edges %>%
+  filter(Link.Limit == 1e5)
+
+table(test$Length==0)
+
+#No nodes on different sites has length 0
+VertexMetaData <- trans1 %>%
+  mutate(Name = str_sub(Bus.Name, 1, 4)%>% gsub("-|_", "",.)) %>% #converts to site level for nodes, this reduces by about 450 nodes almost half
+  group_by(Name) %>%
+  summarise(Voltage = max(Voltage),
+            Demand = sum(Demand),
+            Generation = sum(Generation.B.....Year.Round...Transport.Model.),
+            BalencedPower = sum(BusTransferB),
+            Bus.Order = min(Bus.Order)) 
+
+
+trans2Test <- read_excel(file.path("/home/jonno/Dropbox/Jonathan_Bourne_Phd_Folder/Tariff and Transport",
+                                   "Tariff & Transport Model_2018_19 Tariffs_External.xlsm"), sheet =12, skip = 11) %>%
+  setNames(make.names(names(.))) %>% 
+  .[,17:59] %>% #Select only the edge part of the data
+  filter(!is.na(Bus.1)) %>% #remove emty rows
+  mutate(Bus.1 = str_sub(Bus.1, 1, 4) %>% gsub("-|_", "",.),   #convert to site from individual nodes, this simplifies a lot a prevents sites being taken down piecemeal
+         Bus.2 = str_sub(Bus.2, 1, 4)%>% gsub("-|_", "",.)) %>%
+  filter(!(Bus.1==Bus.2)) %>% #removes internal connections, about 400 edges
+  group_by(Bus.1, Bus.2) %>% #trying to stop the non-unique identifier problem
+  summarise(
+    Y = mean(1/X..Peak.Security.), #create susceptance
+    Link.Limit = sum(Link.Limit),
+    Length = mean(OHL.Length + Cable.Length), #They are all pretty much the same length when they match like this, so this isn't very important
+    Combines = n() #tells howmany parallel edges between two different sites were combined together, is about 300 edges
+    ) %>% 
+  ungroup %>%
+  mutate(Link = paste(Bus.1,Bus.2, sep = "-"))
+
+
+gbase2 <- graph_from_data_frame(trans2Test, directed=FALSE, vertices = VertexMetaData)
+
+gbase2 <- set.edge.attribute(gbase2, "name", value = get.edge.attribute(gbase2, "Link")) %>%
+  set.edge.attribute(., "weight", value = get.edge.attribute(gbase2, "Link.Limit"))
+
+
+#If the voltage of the from node is equal to the voltage of the two node then the line voltage is also the same, otherwise the line is a transformer and the voltage is 0
+# #There is no reason why the Voltage shouldn't be the max or the min either, I just chose to make it 0 
+# EdgeVoltage <- ifelse(
+#   get.vertex.attribute(gbase2, "Voltage", get.edgelist(gbase2)[,1])== get.vertex.attribute(gbase2, "Voltage", get.edgelist(gbase2)[,2]),
+#   get.vertex.attribute(gbase2, "Voltage", get.edgelist(gbase2)[,1]),
+#   0)
+
+#Takes the mini
+EdgeVoltage <- ifelse(
+  get.vertex.attribute(gbase2, "Voltage", get.edgelist(gbase2)[,1])== get.vertex.attribute(gbase2, "Voltage", get.edgelist(gbase2)[,2]), 
+   get.vertex.attribute(gbase2, "Voltage", get.edgelist(gbase2)[,1]),
+  pmin( get.vertex.attribute(gbase2, "Voltage", get.edgelist(gbase2)[,1]), get.vertex.attribute(gbase2, "Voltage", get.edgelist(gbase2)[,2])))
+
+
+
+gstandard <- set_edge_attr(gbase2, "Voltage", value = EdgeVoltage) %>%
+  PowerFlow(., SlackRef = "GLLE" )
+
+
+  BaseCoords <- layout_nicely(gstandard) %>% 
+    as_tibble %>% 
+    mutate(Node = names(V(gstandard)))
+
+  test <- gstandard %>%
+   # simplify(., remove.multiple = T, remove.loops = T) %>%
+  as_data_frame(.) %>%
+  select(from, to, Link, Voltage) %>%
+gather(key = "type", value = "Node", -Voltage,-Link) %>%
+    left_join(BaseCoords)
+ 
+  test %>%
+  mutate(Voltage = factor(Voltage)) %>%
+  ggplot(aes(x = V1, y = V2)) + 
+  geom_line(aes(colour = Voltage, group = Link)) 
+
+```
+
