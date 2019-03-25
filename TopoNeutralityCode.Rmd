@@ -7,15 +7,30 @@ editor_options:
   chunk_output_type: console
 ---
 
+
+14.03.19
+Robustness analysis of complex networks with power decentralization strategy via flow-sensitive centrality against cascading failures. This paper has an electrical centrality measure and a measure called flow sensitivity. That attempts to use electrical centrality and a measure of structure to identify where generation should go to maximise robustness. This would be a good paper to think about when doing topological neutrality.
+
 This code explores the effect of what is removed on the amount of overloads/islands/targeted on the system
 
 pandapower, PyPSA, PYPOWER
+
+Generating Statistically Correct Random Topologies for Testing Smart Grid Communication and Control Networks
+
+Generating random topology power grids
+
+Electrical centrality measures for electric power grid vulnerability analysis
+
+https://www.nature.com/articles/ncomms4969
+
+#Datasets of transmission systems
+https://energydata.info/dataset
 
 #Setup Block
 
 ```{r}
 
-packages <- c("tidyverse", "igraph","readr","readxl", "broom", "zoo", "stringr","foreach", "doMC",  "xtable", "geomnet", "ggnetwork", "rlang", "animation", "ggridges", "poweRlaw", "Rtsne", "caret", "ranger", "xtable", "broom", "modelr", "yardstick", "sf", "rgdal", "foreach", "doMC")
+packages <- c("tidyverse", "igraph","readr","readxl", "broom", "zoo", "stringr","foreach", "doMC",  "xtable", "geomnet", "ggnetwork", "rlang", "animation", "ggridges", "poweRlaw", "Rtsne", "caret", "ranger", "xtable", "broom", "modelr", "yardstick", "sf", "rgdal", "sf", "rgdal", "RColorBrewer")
 
 new.packages <- packages[!(packages %in% installed.packages()[,"Package"])]
 if(length(new.packages)) install.packages(new.packages)
@@ -45,7 +60,8 @@ Deletion_Order_Folder <-  file.path(PLwd, "DeletionOrder") #Only one of the dele
 Deletion_Order_Folder <- file.path(PLwd, "DeletionOrder_Nodes")
 StratAttackWd <- "/media/jonno/Seagate Expansion Drive/ProportionalLoading/StratAttack"
 
-source("/home/jonno/Create_ETYS_network/SubCode/LoadData2.R")
+#Load necessary datasets and great the base powergrid network
+source(file.path("/home/jonno/ProportionalLoading", "CreateGBase.R"))
 
 list.files("/home/jonno/Useful_PhD__R_Functions", pattern = ".R", full.names = T) %>%
   walk(~source(.x))
@@ -60,27 +76,17 @@ list.files("/home/jonno/Useful_PhD__R_Functions", pattern = ".R", full.names = T
 setwd(PLwd)
 
 #Ensure there is powerflow
-g <- PowerFlow(gbase, "FECK40")
+#Remove Dead Ends
+g <- RemoveDeadEnds(gbase) 
+#provide correct power flow
+g <- g %>%
+  PowerFlow(., SlackRef = get.vertex.attribute(., "name")[which.min(get.vertex.attribute(., "Bus.Order"))] )
 
-g %>%
-  simplify(., remove.multiple = T, remove.loops = T) %>% 
-    plot(.,vertex.size=.8, edge.arrow.size=.4, vertex.label=NA)
 
 NetworkStats(g) %>%
   xtable() %>% print(type = "latex", file = file.path(FiguresFolder, "NetworkStats.txt"))
 
 AttackRounds <- 1000
-
-#Create a reproducible attack order
-seed<- 1589
-filename <- "DeleteOrders100.rds"
-if(file.exists(filename)){
-  DeleteOrders <- readRDS(filename)
-} else {
-set.seed(seed)
-DeleteOrders <- MultiAttackOrder(gbase, 100)  
-saveRDS(DeleteOrders, filename)
-}
 
 ```
 
@@ -111,7 +117,8 @@ saveRDS(DeleteOrders, filename)
 }
 
 #Make simulations order
-NewFunctionOrder <- NodeCharacteristiceScrambler(gbase, 100)
+set.seed(4654)
+NewFunctionOrder <- NodeCharacteristiceScrambler(g, 100)
   
 ```
 
@@ -122,12 +129,22 @@ setwd(file.path(PLwd, "Scramble", "Strategy"))
 for(n in 1:(ncol(NewFunctionOrder)-1)){
  
  Sim_Order<- NewFunctionOrder  %>% select(-1) %>% pull(n)
+ 
+ #guarantees  you are using the correct graph
+ g <- RemoveDeadEnds(gbase) 
+ #provide correct power flow
+ g <- g %>%
+  PowerFlow(., SlackRef = get.vertex.attribute(., "name")[which.min(get.vertex.attribute(., "Bus.Order"))] )
   
-  g <- ReOrderGraph(gbase, Sim_Order)
-  #calculate Flow
-  g <- PowerFlow(g, "FECK40")
+  g <- ReOrderGraph(g, Sim_Order)
+
+  #Remove Dead Ends
+  g <- RemoveDeadEnds(g) 
+  #provide correct power flow
+  g <- g %>%
+  PowerFlow(., SlackRef = get.vertex.attribute(., "name")[which.min(get.vertex.attribute(., "Bus.Order"))] )
   #Make edges proportional to flow
-  g<- Proportional_Load(g, alpha = 5)
+  g <- Proportional_Load(g, alpha = 5)
   
   folder <- paste0("Order_", n)
   
@@ -147,22 +164,6 @@ SaveMultiAttacks(g,  StratAttackVect, folder, TotalAttackRounds = AttackRounds, 
 ```{r}
 ExtractAttackStats("/media/jonno/Seagate Expansion Drive/Innoculation/Scramble/Strategy", file.path(PLwd, "Attack_Strategy_SummaryData"))
 
-
-AttackRoundData <- list.files(path = file.path("/media/jonno/Seagate Expansion Drive/ProportionalLoading","SummaryData"), 
-                              pattern = ".rds", 
-                              full.names = TRUE) %>%
-   map_df(~read_rds(.x)) %>%
-  filter(alpha == "alpha_value_500") %>%
-  mutate(Strategy = "RandomAttack",
-  PercNum = NodesAttacked/958) %>% 
-  group_by(NodesAttacked) %>%
-  mutate(rankblack = min_rank(-Blackout),
-         rankGC = min_rank(GCfract)) %>%
-  ungroup %>%
-  SummariseMultiAttack %>%
-  mutate(PercNum = NodesAttacked/958)
-
-
 AttackStratRoundData <- list.files(path = file.path(PLwd,"Attack_Strategy_SummaryData"), 
                               pattern = ".rds", 
                               full.names = TRUE) %>%
@@ -177,7 +178,7 @@ AttackStratRoundData <- list.files(path = file.path(PLwd,"Attack_Strategy_Summar
   simulationID = alpha %>%
            str_replace_all(., "_", " ") %>%
            str_extract_all(., "([0-9])+")%>% as.numeric(.),
-  PercNum = NodesAttacked/958) %>% 
+  PercNum = NodesAttacked/vcount(g)) %>% 
   group_by(NodesAttacked, alpha) %>%
   mutate(rankblack = min_rank(-Blackout),
          rankGC = min_rank(GCfract)) %>%
@@ -185,9 +186,8 @@ AttackStratRoundData <- list.files(path = file.path(PLwd,"Attack_Strategy_Summar
 
 
 SummaryofGC<- AttackStratRoundData %>%
-  SummariseMultiAttack %>%
-  mutate(PercNum = NodesAttacked/958) %>%
-  bind_rows(AttackRoundData)
+  SummariseMultiAttack(., groupingvar = Strategy) %>%
+  mutate(PercNum = NodesAttacked/vcount(g))
 
  NodeCollapse <- rbind(SummaryofGC %>%
   select(PercNum, mean, Strategy, GC05, GC95, sd, NodesAttacked) %>% mutate(type = "Giant componant size reduction"),
@@ -201,9 +201,8 @@ test <- NodeCollapse %>% #need to remove infinte values
     filter(is.finite(mean), PercNum < 0.5)  
 
 
-#This shows that the strategy attack on random orders is more aggressive than the random attack on the true order but not much more than that
+#Compares the results of the different strategies
  test %>% 
-  filter(Strategy != "RandomAttack")  %>%
   ggplot(aes(x = PercNum, y =  mean, group = Strategy)) + 
   geom_line(aes(colour = Strategy), show.legend = TRUE) +
   geom_line(data =  test %>% 
@@ -214,7 +213,6 @@ test <- NodeCollapse %>% #need to remove infinte values
 
 #Plot the mean difference between strategies with random nodes and the true order
 ```{r}
-
 
 AttackStratRoundData2 <- list.files(path = file.path("/media/jonno/Seagate Expansion Drive/ProportionalLoading","Attack_Strategy_SummaryData"), 
                               pattern = ".rds", 
@@ -246,26 +244,28 @@ alpha = alpha %>%
   mutate(Strategy = simulationID, 
          simulationID = 1)
 
-
-
+#Doesn't work as the scrambles have a different number of nodes
 test <- NodeCollapse %>%
   filter(type != "Giant componant size reduction") %>%
-  left_join(AttackStratRoundData2) %>%
+  left_join(AttackStratRoundData2, by = c("NodesAttacked", "Strategy")) %>%
   mutate(meanDiff = mean -Blackout,
-         meanRatio = mean/Blackout)
+          meanRatio = mean/Blackout) %>%
+  rename(PercNum = PercNum.x)
 
 test %>%
   filter(!is.na(MaxComp)) %>%
-   ggplot(aes(x = PercNum, y =  meanDiff, group = Strategy)) + 
+   ggplot(aes(x = PercNum, y =  meanDiff, group = Strategy)) +
   geom_line(aes(colour = Strategy), show.legend = TRUE) +#
   labs(title = "Mean difference from the True node function")
 
-#
+#PerNum is not working properly making the true order seem much weaker than it actually is.
+#Nodesattacked doesn't have this problem
+
 test %>%
   filter(Strategy != "RandomAttack") %>%
-  select(PercNum, mean, Strategy, Blackout) %>%
-  gather(key = "type", value = "value", -Strategy, -PercNum) %>%
-  ggplot(aes(x = PercNum, y = value, colour = type)) + 
+  select(PercNum, mean, Strategy, Blackout, NodesAttacked) %>%
+  gather(key = "type", value = "value", -Strategy, -PercNum, -NodesAttacked) %>%
+  ggplot(aes(x = NodesAttacked, y = value, colour = type)) + 
   geom_line() + 
   facet_wrap(~Strategy)
 
@@ -278,7 +278,7 @@ RandomStratScrambleData <- AttackStratRoundData %>%
 #A lot of simulations go through a rapid network collapse after having a relatively linear period of growth
 RandomStratScrambleData %>%
 #  select(PercNum, mean, Strategy, Blackout) %>%
-  ggplot(aes(x = PercNum, y = Blackout, colour = type, group = simulationID)) + 
+  ggplot(aes(x = NodesAttacked, y = Blackout, colour = type, group = simulationID)) + 
   geom_line() +
   facet_wrap(~Strategy)+
   labs(x = "Percentage of nodes Attacked", title = "Comparing scrambled networks with the real network using different strategies")
@@ -316,6 +316,43 @@ SimEval %>%
   ggplot(aes(x = Strategy, y = estimate, fill = Strategy)) + geom_boxplot()+
     facet_wrap(metric~., ncol = 1, scales = "free_y") +
   theme(legend.position="none")
+
+```
+
+#Difference between total number of attacks by strategy
+
+The true order is much more vulnerable to attack than the random scramble... Why?
+```{r}
+
+OriginalAttacks <- RandomStratScrambleData %>%
+  filter(type == "Original") %>%
+  group_by(Strategy, simulationID) %>%
+  summarise(NodesAttacked = max(NodesAttacked),
+            Nodes = max(TotalNodes) ,
+              Edges = max(TotalEdges)) 
+
+RandomStratScrambleData %>%
+  filter(type ==  "Scramble") %>%
+  group_by(Strategy, simulationID) %>%
+  summarise(NodesAttacked = max(NodesAttacked)) %>%
+  ggplot(aes(x = NodesAttacked, fill =  Strategy)) + geom_histogram(binwidth = 10)+
+  geom_vline(data = OriginalAttacks,
+    aes(xintercept = NodesAttacked, color =  Strategy)) +
+  facet_wrap(~Strategy)
+
+RandomStratScrambleData %>%
+  filter(type ==  "Scramble") %>%
+  group_by(simulationID) %>%
+  summarise(Nodes = max(TotalNodes)-512,
+            Edges = max(TotalEdges)) %>%
+  gather(., key = type, value = value, -simulationID) %>%
+  filter(type == "Nodes") %>%
+  ggplot(aes(x = value)) + geom_histogram(binwidth = 2)
++
+  geom_vline(xintercept = OriginalAttacks$Nodes[1])
+  facet_wrap(~type, scales = "free_x")
+
+rm(OriginalAttacks)
 
 ```
 
@@ -463,43 +500,40 @@ test %>%
 
 #Lost in scramble 
 
-The amount of edges and nodes that are lost are quite small so I am not that botheres about correcting for it.
 ```{r}
 
-EdgesNodesScramble <- 1:100 %>% map_df(~{
+test <- 1:1e4 %>% map_df(~{
+  
+ print(.x)
  
-  print(.x)
- Sim_Order <- NewFunctionOrder  %>% select(-1) %>% pull(.x)
+  NewFunctionOrder <- NodeCharacteristiceScrambler(g, 1, seed = .x)
   
-  g <- ReOrderGraph(gbase, Sim_Order)
-  #calculate Flow
-  g <- PowerFlow(g, "FECK40")
-  #Make edges proportional to flow
-  g <- Proportional_Load(g, alpha = 5)
+  Sim_Order<- NewFunctionOrder  %>% select(-1) %>% pull(1)
   
-  UselessEdge <- (get.edge.attribute(g, "PowerFlow")==0)
+  g <- ReOrderGraph(g, Sim_Order)
+  
+  #Ensure there is powerflow
+  #Remove Dead Ends
+  g <- testRemove(g)$result
 
-  print(get.edge.attribute(g, "name", index = (1:length(UselessEdge))[UselessEdge]) )
-  #Remove Edges that are not doing anything and then any islanded nodes.
-  #This is done before the simulation begins
-  g <- delete.edges(g, (1:length(UselessEdge))[UselessEdge]) %>%
-    BalencedGenDem(., "Demand", "Generation")
-
-  tibble(Edges = ecount(g),
-         Nodes = vcount(g),
-         components = components(g)$no,
-         Order = .x) 
-
+  tibble(Nodes = vcount(g), Edges = ecount(g), simulation = .x)
+  
 })
 
 
+test2 <- test %>% group_by(Nodes) %>% summarise(counts = n())
 
-EdgesNodesScramble %>%
-  ggplot(aes(x = Edges)) + geom_density()
+test %>%
+  ggplot(aes(x = Nodes)) + geom_histogram(binwidth = 1)
 
-EdgesNodesScramble %>%
-  ggplot(aes(x = Nodes)) + geom_density()
 
+test %>%
+  select(Nodes) %>%
+  summarise_all(funs(mean, max, min, sd))
+
+test %>%
+  select(Edges) %>%
+  summarise_all(funs(mean, max, min, sd))
 
 ```
 
@@ -546,7 +580,6 @@ ModConf <- confusionMatrix(factor(Preds$predictions, levels = c(1,0)), factor(tr
   mutate(Type = .x)
 
 })
-
 
 RangerPerf %>%
   ggplot(aes(x = Type, y = Accuracy-AccuracyNull)) + geom_boxplot()
@@ -609,97 +642,120 @@ The key is to understand what is happening in terms of placement of node and gen
 #Islanding vs overloading
 
 
-#Simplify network
 
-This chunk looks at removing all voltage 0 or distance 0 nodes also near 0.
+
+# geo plot
+
+```{r}
+#load points
+ points <- read_csv(file.path(basewd, "point.csv"))
+
+#split coords
+coords2 <-  str_split_fixed(string = points$Lat.2, pattern = ",", n = 2)
+#place coords in df
+points <- points %>%
+  mutate(Lat.2 = coords2[,1] %>% as.numeric,
+         Lon.2 = coords2[,2] %>% as.numeric)
+rm(coords2)
+
+#reduce to site level
+  pointsTemp <- points %>%
+    filter(!grepl("Derby_South_132kV", SubstationName)) %>% #The node is definately not Derby south
+  mutate(Lat = ifelse(!is.na(Lat.2), Lat.2, Lat),
+         Lon = ifelse(!is.na(Lon.2), Lon.2, Lon),
+         name = str_sub(Edges, 1, 4) %>% gsub("-|_", "",.)) %>%
+    select(name, Lat, Lon) %>%
+    group_by(name) %>%
+    summarise_all(funs(mean, diff={max(.)-min(.)})) %>%
+  rename(Lat = Lat_mean,
+         Lon = Lon_mean)
+  
+  #merge with all nodes
+  pointsTemp <- get.vertex.attribute(g, "name") %>% tibble(name = .) %>%
+  left_join(., pointsTemp) %>%
+  group_by(name) %>%
+  mutate(counts = n()) %>%
+  ungroup %>%
+  group_by(name) %>%
+  mutate(count = n()) %>%
+  ungroup
+  
+  #find nodes with no coords
+  NApoints <- pointsTemp %>%
+  filter(is.na(Lon)) %>%
+  pull(name) %>% str_sub(., 1, 4) %>% gsub("-|_", "",.) %>%  unique()
+
+  #make temporary network to find missing coords
+  g2 <- set.vertex.attribute(g, "Lat", value = pointsTemp$Lat) %>%
+  set.vertex.attribute(., "Lon",value =  pointsTemp$Lon)
+
+#find the average coordinates of the nodes with no coordinates based on thier ego networks
+AllPoints <- NApoints  %>% map_df(~{
+  
+ pointsTemp %>% 
+    filter(name %in% names(ego(g2, nodes = .x)[[1]])) %>%
+    summarise(Lon = mean(Lon, na.rm = T),
+              Lat = mean(Lat, na.rm = T),
+              count = nrow(.), name = .x)
+  
+})
+  
+#make final graph
+g3 <- set.vertex.attribute(g2, "Lat", index = NApoints, value = AllPoints$Lat) %>%
+  set.vertex.attribute(., "Lon",index = NApoints, value = AllPoints$Lon)
+
+Positioning <- matrix(c(get.vertex.attribute(g3, "Lon"),
+                        get.vertex.attribute(g3, "Lat")),
+                      ncol = 2)
+#find missing coords
+test <- Positioning %>% as_tibble()%>%
+  rename(Latitude = V2,
+         Longitude = V1)  %>%
+  mutate(Node = get.vertex.attribute(g3, "name"),
+         Degree = degree(g3),
+         BalencedPower = get.vertex.attribute(g3, "BalencedPower"),
+         D = get.vertex.attribute(g3, "Demand"),
+         G = get.vertex.attribute(g3, "Generation"),
+         NodeType = case_when(
+           BalencedPower<0 ~"Demand",
+           BalencedPower==0~"Transfer",
+           TRUE ~"Generation"
+         )) %>% GeoAndForceCoords(g3, .) 
+
+test <- as_data_frame(g3) %>% select(Link, Link.Limit, PowerFlow) %>%
+  left_join(test, .) %>% as.tibble()
+#Why were these end transfers not removed? in the cleaning phase?
+test %>%
+  mutate(Voltage = factor(Voltage),
+         PositionType = factor(PositionType),
+         PositionType = fct_relevel(PositionType, "Geo Space", after = 0)) %>%
+  ggplot(aes(y = Latitude, x = Longitude)) + 
+  geom_line(aes( group = Link)) +
+  facet_grid(~PositionType) +
+  geom_point(data = . %>% filter(Degree==1 & NodeType=="Transfer"), aes(colour = NodeType)) +
+    theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())
+
+```
+
+
+#Can I check length quality
 ```{r}
 
-Edges <- as_data_frame(gstandard) 
-%>%
-  filter(Voltage != 0, Link.Limit != 1e5)
-
-#Edges of zero length all have 0 voltage, this means we can merge all those nodes with relative impunity.
-test <- Edges %>%
-  filter(Voltage == 0)
-
-table(test$Voltage, test$Length)
-
-#Also all edges with 0 Link limit have 0 length
-test <- Edges %>%
-  filter(Link.Limit == 1e5)
-
-table(test$Length==0)
-
-#No nodes on different sites has length 0
-VertexMetaData <- trans1 %>%
-  mutate(Name = str_sub(Bus.Name, 1, 4)%>% gsub("-|_", "",.)) %>% #converts to site level for nodes, this reduces by about 450 nodes almost half
-  group_by(Name) %>%
-  summarise(Voltage = max(Voltage),
-            Demand = sum(Demand),
-            Generation = sum(Generation.B.....Year.Round...Transport.Model.),
-            BalencedPower = sum(BusTransferB),
-            Bus.Order = min(Bus.Order)) 
+JonnoCoords <- as_data_frame(gstandard) %>%
+  select(Bus.1 = from, Bus.2 = to, Length) %>%
+ calcgeodist(pointsTemp,.)
 
 
-trans2Test <- read_excel(file.path("/home/jonno/Dropbox/Jonathan_Bourne_Phd_Folder/Tariff and Transport",
-                                   "Tariff & Transport Model_2018_19 Tariffs_External.xlsm"), sheet =12, skip = 11) %>%
-  setNames(make.names(names(.))) %>% 
-  .[,17:59] %>% #Select only the edge part of the data
-  filter(!is.na(Bus.1)) %>% #remove emty rows
-  mutate(Bus.1 = str_sub(Bus.1, 1, 4) %>% gsub("-|_", "",.),   #convert to site from individual nodes, this simplifies a lot a prevents sites being taken down piecemeal
-         Bus.2 = str_sub(Bus.2, 1, 4)%>% gsub("-|_", "",.)) %>%
-  filter(!(Bus.1==Bus.2)) %>% #removes internal connections, about 400 edges
-  group_by(Bus.1, Bus.2) %>% #trying to stop the non-unique identifier problem
-  summarise(
-    Y = mean(1/X..Peak.Security.), #create susceptance
-    Link.Limit = sum(Link.Limit),
-    Length = mean(OHL.Length + Cable.Length), #They are all pretty much the same length when they match like this, so this isn't very important
-    Combines = n() #tells howmany parallel edges between two different sites were combined together, is about 300 edges
-    ) %>% 
-  ungroup %>%
-  mutate(Link = paste(Bus.1,Bus.2, sep = "-"))
-
-
-gbase2 <- graph_from_data_frame(trans2Test, directed=FALSE, vertices = VertexMetaData)
-
-gbase2 <- set.edge.attribute(gbase2, "name", value = get.edge.attribute(gbase2, "Link")) %>%
-  set.edge.attribute(., "weight", value = get.edge.attribute(gbase2, "Link.Limit"))
-
-
-#If the voltage of the from node is equal to the voltage of the two node then the line voltage is also the same, otherwise the line is a transformer and the voltage is 0
-# #There is no reason why the Voltage shouldn't be the max or the min either, I just chose to make it 0 
-# EdgeVoltage <- ifelse(
-#   get.vertex.attribute(gbase2, "Voltage", get.edgelist(gbase2)[,1])== get.vertex.attribute(gbase2, "Voltage", get.edgelist(gbase2)[,2]),
-#   get.vertex.attribute(gbase2, "Voltage", get.edgelist(gbase2)[,1]),
-#   0)
-
-#Takes the mini
-EdgeVoltage <- ifelse(
-  get.vertex.attribute(gbase2, "Voltage", get.edgelist(gbase2)[,1])== get.vertex.attribute(gbase2, "Voltage", get.edgelist(gbase2)[,2]), 
-   get.vertex.attribute(gbase2, "Voltage", get.edgelist(gbase2)[,1]),
-  pmin( get.vertex.attribute(gbase2, "Voltage", get.edgelist(gbase2)[,1]), get.vertex.attribute(gbase2, "Voltage", get.edgelist(gbase2)[,2])))
-
-
-
-gstandard <- set_edge_attr(gbase2, "Voltage", value = EdgeVoltage) %>%
-  PowerFlow(., SlackRef = "GLLE" )
-
-
-  BaseCoords <- layout_nicely(gstandard) %>% 
-    as_tibble %>% 
-    mutate(Node = names(V(gstandard)))
-
-  test <- gstandard %>%
-   # simplify(., remove.multiple = T, remove.loops = T) %>%
-  as_data_frame(.) %>%
-  select(from, to, Link, Voltage) %>%
-gather(key = "type", value = "Node", -Voltage,-Link) %>%
-    left_join(BaseCoords)
- 
-  test %>%
-  mutate(Voltage = factor(Voltage)) %>%
-  ggplot(aes(x = V1, y = V2)) + 
-  geom_line(aes(colour = Voltage, group = Link)) 
+test %>%
+  filter(complete.cases(.)) %>%
+with(., postResample(Length, geodist)) %>% 
+      tibble(value = ., type = names(.))%>%
+      spread(key = type, value = value)
 
 ```
 
